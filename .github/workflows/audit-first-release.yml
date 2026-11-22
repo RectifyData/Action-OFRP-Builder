@@ -19,7 +19,7 @@ jobs:
     steps:
       - name: Download original release IMG from GitHub
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           mkdir -p original-release
@@ -44,5 +44,5 @@ jobs:
           (( size > 0 && size <= 67633152 )) || { echo 'Recovery image exceeds S10+ partition capacity' >&2; exit 1; }
       - name: Attach audit to the original release
         env:
-          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload '45036207179' first-release-audit.txt --repo "$GITHUB_REPOSITORY" --clobber
