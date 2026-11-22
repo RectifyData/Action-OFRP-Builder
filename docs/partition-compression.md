@@ -1,36 +1,34 @@
-# Lossless partition compression for the S10+ OrangeFox recovery
+# Lossless full-partition backup and recovery install formats — S10+ OrangeFox
 
-The `foxpart` command adds an **opt-in, lossless Zstandard raw-image backup** for all discoverable physical (`p:`) and mapped logical (`l:`) partitions. This is separate from TWRP's native `.win` GUI backup format, boot ramdisk LZMA, and F2FS filesystem compression.
+The optional recovery-terminal command \`foxpart\` archives physical (\`p:\`) and retrofitted logical (\`l:\`) block partitions losslessly, without reformatting them or changing OrangeFox's native GUI backup implementation.
 
-From the OrangeFox Terminal:
+## Commands
 
-```sh
+\`\`\`sh
 foxpart list
 foxpart backup /external_sd/fox-full-001 --all
 foxpart verify /external_sd/fox-full-001
-```
+\`\`\`
 
-For a selected subset:
+Select partitions to avoid duplicating the physical \`system\` container and mapped logical partitions:
 
-```sh
-foxpart backup /external_sd/fox-selected p:boot l:system l:vendor
-foxpart verify /external_sd/fox-selected
-```
+\`\`\`sh
+foxpart backup /external_sd/my-backup p:boot l:system l:vendor l:product
+foxpart verify /external_sd/my-backup
+\`\`\`
 
-To use greater compression: `FOX_ZSTD_LEVEL=7 foxpart backup /external_sd/high-ratio p:boot l:vendor`. Levels 1–9 are supported (default 3); Zstandard uses one thread to limit RAM use.
+**Codec compatibility:** \`FOX_BACKUP_CODEC=auto\` (default) uses Zstandard where an executable is installed and transparently falls back to the recovery's built-in **gzip** where it is not. Set \`FOX_BACKUP_CODEC=gzip\` or \`FOX_BACKUP_CODEC=zstd\` explicitly to force a format. Compression level \`FOX_ZSTD_LEVEL=1..9\` (default 3) applies to the selected codec. Files end in \`.img.gz\` or \`.img.zst\`. Existing legacy \`#FOX1\` Zstandard archives remain readable.
 
-Every archive uses `p-NAME.img.zst` or `l-NAME.img.zst` with SHA-256 checksums and original partition size recorded in `manifest.txt`. Back up to a **separate external SD card or USB drive**, not internal `/data` or `/sdcard`, particularly when backing up userdata. `--all` also includes the physical `system` container and mapped logical partitions on retrofitted-super devices, so space requirements can be high. The helper refuses backups of mounted partitions.
+## Restore safeguards
 
-**Restore is explicitly opt-in, one partition at a time.** Verify the archive and exact partition layout, unmount the target, then use `foxpart restore /external_sd/fox-selected l:vendor --confirm`. Sensitive partitions (boot, vbmeta, modem, userdata, EFS and similar) additionally require `--critical` and independent hardware verification. Incorrect restores can brick the device. The tool verifies both compressed and decompressed SHA-256 hashes and refuses a target-size mismatch.
+\`foxpart verify DEST\` checks each archive's SHA-256 hash, compressed stream integrity, decompressed SHA-256 and original byte size before accepting it. Restore operates **one partition at a time**: \`foxpart restore DEST l:vendor --confirm\`. Boot, recovery, modem, EFS, userdata and other protected partitions additionally require \`--critical\`, and matching target sizes are mandatory. The tool refuses mounted targets and path mismatches.
 
-Android FBE/metadata encryption can make raw userdata restores unusable across device reformatting or key changes. Do not treat this script as a verified complete-device restore plan. It is a **recovery terminal feature**; a GUI integration is not included.
+Never write backups to the internal \`/data\`, \`/sdcard\` or a filesystem whose block device is being backed up. Use a real externally mounted SD card or USB drive with enough free space. For very large partitions use exFAT or another filesystem supporting files above 4 GiB. Backup of mounted /data is blocked; encryption keys and metadata can make cross-ROM or reformatted raw-data restores unusable.
 
-## Build integration
+**A recovery image build is not proof of bootability or recoverability.** Keep independent partition backups before flashing an experimental image.
 
-The builder copies `tools/foxpart` into `device/samsung/exynos9820-common/recovery/root/system/bin/foxpart`, enables `FOX_USE_ZSTD_BINARY=1`, and checks that the resulting `recovery.img` fits the 67,633,152-byte recovery partition and the script is staged in the ramdisk. It publishes only successful build outputs as GitHub prereleases. The first release remains unchanged.
+## GitHub release formats
 
-The separate `Audit first OrangeFox recovery image` workflow fetches release `45036207179`'s `.img` in GitHub Actions, validates its boot magic, SHA-256 and size, then uploads a text audit report to that original release.
+Successful S10+ recovery builds publish \`recovery.img\`, \`*-Odin.tar\` for Odin's AP selection, and \`*-flashable.zip\` for flashing from an existing compatible recovery. The flashable ZIP verifies the image before writing the **dedicated recovery** partition and verifies a read-back checksum; it does not wipe or reboot the device. Only install on unlocked Samsung Galaxy S10+ Exynos (\`beyond2lte\`) with the matching recovery layout. None of the internal \`FFiles/\` ZIP utilities bundled within the recovery ramdisk must be installed separately.
 
-## Source and validation
-
-Run `sh tests/test_foxpart.sh` on Ubuntu with `zstd` installed to exercise backup, hash verification, restore, tamper rejection, and critical-restore safeguards. Hardware testing remains necessary before treating a recovery build as stable.
+Run \`sh tests/test_foxpart.sh\` (requires \`zstd\` and \`gzip\` on the host) to test both compression formats. Hardware verification is still outstanding.
