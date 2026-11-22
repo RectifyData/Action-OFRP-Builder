@@ -189,6 +189,20 @@ jobs:
         echo "Build output validated: $OUTPUT"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
+    - name: Package OrangeFox flashable ZIP and Odin AP TAR
+      if: env.DEVICE_NAME == 'beyond2lte' && (env.BUILD_TARGET == 'recovery' || env.BUILD_TARGET == 'recoveryimage')
+      run: |
+        set -euo pipefail
+        image="${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/recovery.img"
+        output="${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}"
+        python3 "$GITHUB_WORKSPACE/tools/package_recovery.py" "$image" "$output" "OrangeFox-R12.0-Unofficial-beyond2lte"
+        test -s "$output/OrangeFox-R12.0-Unofficial-beyond2lte-Odin.tar"
+        test -s "$output/OrangeFox-R12.0-Unofficial-beyond2lte-flashable.zip"
+        (
+          cd "$output"
+          sha256sum recovery.img *-Odin.tar *-flashable.zip > SHA256SUMS.txt
+        )
+
     - name: Check the output directory before uploading
       run: |
         ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/
@@ -203,6 +217,7 @@ jobs:
           ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.img
           ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.zip
           ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.tar
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*SHA256SUMS.txt
         prerelease: true
         name: ${{ env.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
@@ -210,6 +225,7 @@ jobs:
           Manifest: ${{ env.MANIFEST_BRANCH }}
           Device: ${{ env.DEVICE_NAME }}
           Target: ${{ env.BUILD_TARGET }}
-          Backup enhancement: lossless Zstandard archive of physical and mapped logical partitions via the foxpart recovery terminal command; untested on hardware.
+          Backup enhancement: lossless Zstandard or built-in gzip archives of physical and mapped logical partitions through foxpart; untested on hardware.
+          Distribution: recovery.img, Odin TAR, flashable ZIP. Images are experimental.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

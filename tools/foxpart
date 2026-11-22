@@ -9,6 +9,9 @@ PHY=${FOX_PHYSICAL_BY_NAME:-}
 LOG=${FOX_LOGICAL_BY_NAME:-/dev/block/mapper}
 TEST_REGULAR=${FOX_TEST_REGULAR_FILES:-0}
 ZSTD=${FOX_ZSTD_BIN:-}
+GZIP=${FOX_GZIP_BIN:-}
+CODEC=${FOX_BACKUP_CODEC:-auto}
+EXT=
 LEVEL=${FOX_ZSTD_LEVEL:-3}
 case "$LEVEL" in 1|2|3|4|5|6|7|8|9) ;; *) printf '%s\n' 'FOX_ZSTD_LEVEL must be 1..9 (low-memory recovery mode)' >&2; exit 2 ;; esac
 
@@ -23,8 +26,10 @@ Usage:
   foxpart verify DEST
   foxpart restore DEST p:boot --confirm [--critical]
 
-All backups are lossless Zstandard (.img.zst) raw partition images.
-Set FOX_ZSTD_LEVEL=1..9 to select a compression level (default 3).\nUses physical (p:) and mapped logical (l:) block devices. The --all
+Backups are lossless Zstandard (.img.zst) or gzip (.img.gz) raw images.
+Set FOX_BACKUP_CODEC=auto|zstd|gzip (auto falls back to gzip if zstd absent).
+Set FOX_ZSTD_LEVEL=1..9 to select a compression level (default 3).
+Uses physical (p:) and mapped logical (l:) block devices. The --all
 option backs up BOTH types, which may duplicate a retrofitted super image.
 Only restore one named partition at a time. No automatic restore-all.
 
@@ -63,13 +68,59 @@ resolve() {
     fi
 }
 
-select_zstd() {
+find_zstd() {
     if [ -n "$ZSTD" ]; then
         [ -x "$ZSTD" ] || fail "zstd is not executable: $ZSTD"
     elif [ -x /sbin/zstd ]; then ZSTD=/sbin/zstd
     elif [ -x /system/bin/zstd ]; then ZSTD=/system/bin/zstd
     elif command -v zstd >/dev/null 2>&1; then ZSTD=$(command -v zstd)
-    else fail 'zstd is absent: enable FOX_USE_ZSTD_BINARY=1 in the OrangeFox build'; fi
+    else return 1; fi
+}
+find_gzip() {
+    if [ -n "$GZIP" ]; then
+        [ -x "$GZIP" ] || fail "gzip is not executable: $GZIP"
+    elif [ -x /system/bin/gzip ]; then GZIP=/system/bin/gzip
+    elif command -v gzip >/dev/null 2>&1; then GZIP=$(command -v gzip)
+    else fail 'neither gzip nor zstd is available for backups'; fi
+}
+select_codec() {
+    case "$CODEC" in
+        auto) if find_zstd; then CODEC=zstd; else CODEC=gzip; fi ;;
+        gzip) ;;
+        zstd) find_zstd || fail 'zstd requested but missing (use FOX_BACKUP_CODEC=gzip)' ;;
+        *) fail "unknown compression codec: $CODEC" ;;
+    esac
+    case "$CODEC" in
+        zstd) EXT=zst ;;
+        gzip) find_gzip; EXT=gz ;;
+    esac
+}
+compress_stream() {
+    case "$CODEC" in
+        zstd) "$ZSTD" "-$LEVEL" -T1 -q -c "$1" ;;
+        gzip) "$GZIP" "-$LEVEL" -c "$1" ;;
+    esac
+}
+decompress_stream() {
+    case "$CODEC" in
+        zstd) "$ZSTD" -d -q -c "$1" ;;
+        gzip) "$GZIP" -dc "$1" ;;
+    esac
+}
+test_archive() {
+    case "$CODEC" in
+        zstd) "$ZSTD" -q -t "$1" ;;
+        gzip) "$GZIP" -t "$1" ;;
+    esac
+}
+read_manifest_codec() {
+    IFS='|' read -r marker codec level rest < "$dir/manifest.txt" || :
+    case "$marker" in
+        '#FOX1') CODEC=zstd ;;
+        '#FOX2') CODEC=$codec ;;
+        *) fail "unsupported backup manifest version: $marker" ;;
+    esac
+    select_codec
 }
 
 safe_dir() {
@@ -80,6 +131,12 @@ safe_dir() {
             [ "$TEST_REGULAR" = 1 ] || fail 'backup directory must not be internal /data, /sdcard or /tmp' ;;
     esac
     [ ! -L "$dir" ] || fail 'backup directory cannot be a symlink'
+    case "$dir" in /*) ;; *) [ "$TEST_REGULAR" = 1 ] || fail 'use an absolute external-storage path' ;; esac
+    if [ "$TEST_REGULAR" != 1 ]; then
+        case "$dir" in /external_sd/*|/usb_otg/*|/mnt/media_rw/*|/storage/*) ;; *)
+            fail 'backup location must be an external SD card or USB storage mount' ;;
+        esac
+    fi
 }
 
 size_of() {
@@ -105,23 +162,25 @@ backup_one() {
     if [ "$TEST_REGULAR" != 1 ] && is_mounted "$name"; then
         fail "$1 is mounted; unmount before imaging it"
     fi
-    file="$kind-$name.img.zst"
+    file="$kind-$name.img.$EXT"
     dest="$dir/$file"
     tmp="$dest.part"
     [ ! -e "$dest" ] && [ ! -e "$tmp" ] || fail "refusing to overwrite: $dest"
     bytes=$(size_of "$path")
     case "$bytes" in ''|*[!0-9]*) fail "invalid size for $path" ;; esac
-    msg "backing up $1 ($bytes bytes) with zstd level $LEVEL"
-    if ! "$ZSTD" "-$LEVEL" -T1 -q -c "$path" > "$tmp"; then
+    msg "backing up $1 ($bytes bytes) with $CODEC level $LEVEL"
+    if ! compress_stream "$path" > "$tmp"; then
         rm -f "$tmp"
         fail "compression failed: $path"
     fi
-    if ! "$ZSTD" -q -t "$tmp"; then
+    if ! test_archive "$tmp"; then
         rm -f "$tmp"
         fail "compressed image failed integrity test: $tmp"
     fi
     # The compressed stream is independently checked before writing metadata.
-    rawhash=$("$ZSTD" -d -q -c "$tmp" | sha256sum | awk '{print $1}')
+    rawhash=$(decompress_stream "$tmp" | sha256sum | awk '{print $1}')
+    realbytes=$(decompress_stream "$tmp" | wc -c | tr -d '[:space:]')
+    [ "$realbytes" = "$bytes" ] || { rm -f "$tmp"; fail "stream size mismatch for $1: $realbytes != $bytes"; }
     compressedhash=$(hash_of "$tmp")
     [ "${#rawhash}" = 64 ] && [ "${#compressedhash}" = 64 ] || fail 'checksum calculation failed'
     mv "$tmp" "$dest"
@@ -133,22 +192,24 @@ verify_one() {
     kind=$1; name=$2; bytes=$3; rawhash=$4; compressedhash=$5; file=$6
     valid_name "$name" || fail 'manifest includes invalid name'
     case "$kind" in p|l) ;; *) fail 'manifest includes invalid type' ;; esac
-    [ "$file" = "$kind-$name.img.zst" ] || fail "manifest filename mismatch: $file"
+    [ "$file" = "$kind-$name.img.$EXT" ] || fail "manifest filename mismatch: $file"
     case "$bytes" in ''|*[!0-9]*) fail 'manifest has invalid size' ;; esac
     case "$rawhash$compressedhash" in *[!a-fA-F0-9]*) fail 'manifest has invalid hash' ;; esac
     [ "${#rawhash}" = 64 ] && [ "${#compressedhash}" = 64 ] || fail 'manifest has invalid hash length'
     [ -f "$dir/$file" ] && [ ! -L "$dir/$file" ] || fail "missing or linked archive: $file"
     [ "$(hash_of "$dir/$file")" = "$compressedhash" ] || fail "compressed SHA-256 mismatch: $file"
-    "$ZSTD" -q -t "$dir/$file" || fail "zstd checksum mismatch: $file"
-    actual=$("$ZSTD" -d -q -c "$dir/$file" | sha256sum | awk '{print $1}')
+    test_archive "$dir/$file" || fail "$CODEC stream integrity mismatch: $file"
+    actual=$(decompress_stream "$dir/$file" | sha256sum | awk '{print $1}')
     [ "$actual" = "$rawhash" ] || fail "uncompressed SHA-256 mismatch: $file"
+    actual_size=$(decompress_stream "$dir/$file" | wc -c | tr -d '[:space:]')
+    [ "$actual_size" = "$bytes" ] || fail "decompressed size mismatch: $file"
     msg "verified $kind:$name"
 }
 
 find_manifest_entry() {
     want=$1; found=0
     while IFS='|' read -r m_kind m_name m_bytes m_raw m_zip m_file; do
-        [ "$m_kind" = '#FOX1' ] && continue
+        case "$m_kind" in '#FOX1'|'#FOX2') continue ;; esac
         [ -n "$m_kind" ] || continue
         if [ "$m_kind:$m_name" = "$want" ]; then
             [ "$found" = 0 ] || fail "duplicate manifest entry: $want"
@@ -177,10 +238,10 @@ case "$cmd" in
     backup)
         [ "$#" -ge 2 ] || fail 'usage: backup DEST --all | p:NAME l:NAME ...'
         safe_dir "$1"; shift
-        locate_physical; select_zstd
+        locate_physical; select_codec
         [ ! -e "$dir" ] || fail "backup destination already exists: $dir"
         mkdir -p "$dir" || fail "cannot create: $dir"
-        printf '#FOX1|zstd|%s|||\n' "$LEVEL" > "$dir/manifest.txt"
+        printf '#FOX2|%s|%s|||\n' "$CODEC" "$LEVEL" > "$dir/manifest.txt"
         if [ "$1" = --all ]; then
             [ "$#" = 1 ] || fail '--all cannot be mixed with explicit names'
             count=0
@@ -196,11 +257,12 @@ case "$cmd" in
         ;;
     verify)
         [ "$#" = 1 ] || fail 'usage: verify DEST'
-        safe_dir "$1"; select_zstd
-        [ -f "$dir/manifest.txt" ] || fail 'missing manifest'
+        safe_dir "$1"
+        [ -f "$dir/manifest.txt" ] && [ ! -L "$dir/manifest.txt" ] || fail 'missing or linked manifest'
+        read_manifest_codec
         count=0
         while IFS='|' read -r a b c d e f; do
-            [ "$a" = '#FOX1' ] && continue
+            case "$a" in '#FOX1'|'#FOX2') continue ;; esac
             [ -n "$a" ] || continue
             verify_one "$a" "$b" "$c" "$d" "$e" "$f"
             count=$((count + 1))
@@ -217,14 +279,15 @@ case "$cmd" in
             case "$option" in --confirm) confirm=1 ;; --critical) critical=1 ;; *) fail "unknown option: $option" ;; esac
         done
         [ "$confirm" = 1 ] || fail 'restore requires --confirm (this overwrites a partition)'
-        select_zstd; locate_physical
+        locate_physical
         resolve "$part"
         target_kind=$kind; target_name=$name; target_path=$path
         case "$target_name" in
             boot|recovery|dtbo|vbmeta*|modem*|sboot*|param*|efs|persist|keystorage*|userdata|metadata|omr)
                 [ "$critical" = 1 ] || fail 'sensitive partition: add --critical only after verifying your exact device/layout' ;;
         esac
-        [ -f "$dir/manifest.txt" ] || fail 'missing manifest'
+        [ -f "$dir/manifest.txt" ] && [ ! -L "$dir/manifest.txt" ] || fail 'missing or linked manifest'
+        read_manifest_codec
         find_manifest_entry "$part"
         verify_one "$target_kind" "$target_name" "$selected_bytes" "$selected_raw" "$selected_zip" "$selected_file"
         target_bytes=$(size_of "$target_path")
@@ -235,8 +298,8 @@ case "$cmd" in
         fi
         msg "RESTORING $part ($target_bytes bytes) to $target_path"
         # Verify the entire stream before the first write, then decompress directly.
-        "$ZSTD" -q -t "$dir/$selected_file" || fail 'archive failed pre-restore verification'
-        "$ZSTD" -d -q -c "$dir/$selected_file" > "$target_path" || fail 'restore failed; target may be incomplete'
+        test_archive "$dir/$selected_file" || fail 'archive failed pre-restore verification'
+        decompress_stream "$dir/$selected_file" > "$target_path" || fail 'restore failed; target may be incomplete'
         sync
         msg 'restore completed; verify your device and reboot only when safe'
         ;;

@@ -5,11 +5,13 @@ on:
     paths:
       - 'tools/foxpart'
       - 'tests/test_foxpart.sh'
+      - 'tools/package_recovery.py'
       - '.github/workflows/test-partition-backup.yml'
   pull_request:
     paths:
       - 'tools/foxpart'
       - 'tests/test_foxpart.sh'
+      - 'tools/package_recovery.py'
       - '.github/workflows/test-partition-backup.yml'
   workflow_dispatch:
 
@@ -21,11 +23,12 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Install zstd
-        run: sudo apt-get update -qq && sudo apt-get install -y zstd
-      - name: Syntax and functional tests
+      - name: Install codecs
+        run: sudo apt-get update -qq && sudo apt-get install -y zstd gzip
+      - name: Validate backup and packaging syntax
         run: |
           set -e
           sh -n tools/foxpart
           sh -n tests/test_foxpart.sh
+          python3 -m py_compile tools/package_recovery.py
           sh tests/test_foxpart.sh
