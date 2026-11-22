@@ -1,6 +1,9 @@
 name: Recovery Build
 
 on:
+  push:
+    branches:
+      - build/beyond2lte
   workflow_dispatch:
     inputs:
       SYNC_URL:
@@ -44,9 +47,20 @@ on:
         required: true
         default: 'recovery'
 
+env:
+  SYNC_URL: ${{ github.event_name == 'push' && 'https://gitlab.com/OrangeFox/sync.git' || inputs.SYNC_URL }}
+  MANIFEST_BRANCH: ${{ github.event_name == 'push' && '12.1' || inputs.MANIFEST_BRANCH }}
+  DEVICE_TREE_URL: ${{ github.event_name == 'push' && 'https://github.com/Exynos982x-OrangeFox/android_device_samsung_beyond2lte' || inputs.DEVICE_TREE_URL }}
+  DEVICE_TREE_BRANCH: ${{ github.event_name == 'push' && 'fox_12.1' || inputs.DEVICE_TREE_BRANCH }}
+  DEVICE_PATH: ${{ github.event_name == 'push' && 'device/samsung/beyond2lte' || inputs.DEVICE_PATH }}
+  COMMON_TREE_URL: ${{ github.event_name == 'push' && 'https://github.com/Exynos982x-OrangeFox/android_device_samsung_exynos9820-common' || inputs.COMMON_TREE_URL }}
+  COMMON_PATH: ${{ github.event_name == 'push' && 'device/samsung/exynos9820-common' || inputs.COMMON_PATH }}
+  DEVICE_NAME: ${{ github.event_name == 'push' && 'beyond2lte' || inputs.DEVICE_NAME }}
+  MAKEFILE_NAME: ${{ github.event_name == 'push' && 'twrp_beyond2lte' || inputs.MAKEFILE_NAME }}
+  BUILD_TARGET: ${{ github.event_name == 'push' && 'recovery' || inputs.BUILD_TARGET }}
+
 jobs:
   build:
-    if: github.event.repository.owner.id == github.event.sender.id
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -62,9 +76,9 @@ jobs:
 
     - name: Initialize workspace
       run: |
-        mkdir workspace
+        mkdir -p workspace
         cd workspace
-        echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
+        echo "workspace-folder=$(pwd)" >> "$GITHUB_OUTPUT"
       id: pwd
 
     - name: Prepare the build environment
@@ -87,9 +101,9 @@ jobs:
         java-version: '11'
 
     - name: Setup SSH Keys
-      if: ${{ startsWith(github.event.inputs.SYNC_URL, 'git@github.com') || 
-          startsWith(github.event.inputs.DEVICE_TREE_URL, 'git@github.com') ||
-          startsWith(github.event.inputs.COMMON_TREE_URL, 'git@github.com') }}
+      if: ${{ startsWith(env.SYNC_URL, 'git@github.com') || 
+          startsWith(env.DEVICE_TREE_URL, 'git@github.com') ||
+          startsWith(env.COMMON_TREE_URL, 'git@github.com') }}
       uses: webfactory/ssh-agent@v0.9.0
       with:
           ssh-private-key: |
@@ -98,26 +112,26 @@ jobs:
     - name: Sync OrangeFox sources and minimal manifest
       run: |
         cd ${{ steps.pwd.outputs.workspace-folder }}
-        git clone ${{ github.event.inputs.SYNC_URL }}
+        git clone "$SYNC_URL" sync
         cd sync
-        ./orangefox_sync.sh --branch ${{ github.event.inputs.MANIFEST_BRANCH }} --path ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        ./orangefox_sync.sh --branch "$MANIFEST_BRANCH" --path "${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone device tree
       run: |
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        mkdir -p "$(dirname './${{ github.event.inputs.DEVICE_PATH }}')"
-        git clone --depth 1 --branch '${{ github.event.inputs.DEVICE_TREE_BRANCH }}' '${{ github.event.inputs.DEVICE_TREE_URL }}' './${{ github.event.inputs.DEVICE_PATH }}'
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
+        mkdir -p "$(dirname "$DEVICE_PATH")"
+        git clone --depth 1 --branch "$DEVICE_TREE_BRANCH" "$DEVICE_TREE_URL" "$DEVICE_PATH"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Clone common tree
       if: |
-        github.event.inputs.COMMON_TREE_URL != ''
-        && github.event.inputs.COMMON_PATH != ''
+        env.COMMON_TREE_URL != ''
+        && env.COMMON_PATH != ''
       run: |
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
-        mkdir -p "$(dirname './${{ github.event.inputs.COMMON_PATH }}')"
-        git clone --depth 1 --branch '${{ github.event.inputs.DEVICE_TREE_BRANCH }}' '${{ github.event.inputs.COMMON_TREE_URL }}' './${{ github.event.inputs.COMMON_PATH }}'
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
+        mkdir -p "$(dirname "$COMMON_PATH")"
+        git clone --depth 1 --branch "$DEVICE_TREE_BRANCH" "$COMMON_TREE_URL" "$COMMON_PATH"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Set Swap Space
@@ -127,40 +141,56 @@ jobs:
 
     - name: Building recovery
       run: |
-        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}
+        cd ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}
         set -eo pipefail
-        export FOX_BUILD_DEVICE='${{ github.event.inputs.DEVICE_NAME }}'
+        export FOX_BUILD_DEVICE="$DEVICE_NAME"
         export ALLOW_MISSING_DEPENDENCIES=true
         source build/envsetup.sh
-        MAKEFILE_NAME='${{ github.event.inputs.MAKEFILE_NAME }}'
-        BUILD_TARGET='${{ github.event.inputs.BUILD_TARGET }}'
+        case "$MAKEFILE_NAME" in *_eng) MAKEFILE_NAME="${MAKEFILE_NAME%_eng}" ;; esac
         case "$MAKEFILE_NAME" in *-eng) LUNCH_TARGET="$MAKEFILE_NAME" ;; *) LUNCH_TARGET="${MAKEFILE_NAME}-eng" ;; esac
-        case "$BUILD_TARGET" in *image) IMAGE_TARGET="$BUILD_TARGET" ;; *) IMAGE_TARGET="${BUILD_TARGET}image" ;; esac
+        case "$BUILD_TARGET" in
+          recovery|recoveryimage) IMAGE_TARGET=recoveryimage; IMAGE_FILE=recovery.img ;;
+          boot|bootimage) IMAGE_TARGET=bootimage; IMAGE_FILE=boot.img ;;
+          vendorboot|vendorbootimage) IMAGE_TARGET=vendorbootimage; IMAGE_FILE=vendor_boot.img ;;
+          *) echo "Unsupported build target: $BUILD_TARGET"; exit 1 ;;
+        esac
         lunch "$LUNCH_TARGET"
         mka adbd "$IMAGE_TARGET" -j2
-        test -s "out/target/product/${FOX_BUILD_DEVICE}/${IMAGE_TARGET/recoveryimage/recovery.img}" || test -s "out/target/product/${FOX_BUILD_DEVICE}/recovery.img"
+        OUTPUT="out/target/product/$DEVICE_NAME/$IMAGE_FILE"
+        if ! test -s "$OUTPUT"; then
+          echo "Build completed without required image: $OUTPUT"
+          exit 1
+        fi
+        if [[ "$IMAGE_FILE" == "recovery.img" ]]; then
+          BYTES=$(stat -c '%s' "$OUTPUT")
+          if (( BYTES > 67633152 )); then
+            echo "Recovery image too large: $BYTES bytes (maximum 67633152)"
+            exit 1
+          fi
+        fi
+        echo "Build output validated: $OUTPUT"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
     - name: Check the output directory before uploading
       run: |
-        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/
+        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/
         echo
-        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/
+        ls -al ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/
 
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
         fail_on_unmatched_files: true
         files: |
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.img
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.zip
-          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ github.event.inputs.MANIFEST_BRANCH }}/out/target/product/${{ github.event.inputs.DEVICE_NAME }}/*.tar
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.img
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.zip
+          ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.tar
         prerelease: true
-        name: ${{ github.event.inputs.DEVICE_NAME }}-${{ github.run_id }}
+        name: ${{ env.DEVICE_NAME }}-${{ github.run_id }}
         tag_name: ${{ github.run_id }}
         body: |
-          Manifest: ${{ github.event.inputs.MANIFEST_BRANCH }}
-          Device: ${{ github.event.inputs.DEVICE_NAME }}
-          Target: ${{ github.event.inputs.BUILD_TARGET }}
+          Manifest: ${{ env.MANIFEST_BRANCH }}
+          Device: ${{ env.DEVICE_NAME }}
+          Target: ${{ env.BUILD_TARGET }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
