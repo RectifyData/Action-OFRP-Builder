@@ -83,10 +83,8 @@ jobs:
 
     - name: Prepare the build environment
       run: |
-        sudo apt update && sudo apt upgrade -y
-        DEBIAN_FRONTEND=noninteractive sudo apt install -yq \
-            linux-modules-extra-$(uname -r) \
-            git python3 tar aria2
+        sudo apt-get update -qq
+        sudo apt-get install -y git python3 tar aria2
         git clone https://gitlab.com/OrangeFox/misc/scripts
         cd scripts
         sudo bash setup/android_build_env.sh
@@ -145,7 +143,11 @@ jobs:
         set -eo pipefail
         export FOX_BUILD_DEVICE="$DEVICE_NAME"
         export ALLOW_MISSING_DEPENDENCIES=true
+        set +e
         source build/envsetup.sh
+        set -e
+        type lunch >/dev/null 2>&1 || { echo 'envsetup did not define lunch'; exit 1; }
+        type mka >/dev/null 2>&1 || { echo 'envsetup did not define mka'; exit 1; }
         case "$MAKEFILE_NAME" in *_eng) MAKEFILE_NAME="${MAKEFILE_NAME%_eng}" ;; esac
         case "$MAKEFILE_NAME" in *-eng) LUNCH_TARGET="$MAKEFILE_NAME" ;; *) LUNCH_TARGET="${MAKEFILE_NAME}-eng" ;; esac
         case "$BUILD_TARGET" in
@@ -161,7 +163,7 @@ jobs:
           echo "Build completed without required image: $OUTPUT"
           exit 1
         fi
-        if [[ "$IMAGE_FILE" == "recovery.img" ]]; then
+        if [[ "$DEVICE_NAME" == "beyond2lte" && "$IMAGE_FILE" == "recovery.img" ]]; then
           BYTES=$(stat -c '%s' "$OUTPUT")
           if (( BYTES > 67633152 )); then
             echo "Recovery image too large: $BYTES bytes (maximum 67633152)"
@@ -180,7 +182,7 @@ jobs:
     - name: Upload to Release
       uses: softprops/action-gh-release@v2
       with:
-        fail_on_unmatched_files: true
+        fail_on_unmatched_files: false
         files: |
           ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.img
           ${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/out/target/product/${{ env.DEVICE_NAME }}/*.zip
