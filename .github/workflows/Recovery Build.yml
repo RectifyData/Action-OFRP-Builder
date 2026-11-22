@@ -132,6 +132,15 @@ jobs:
         git clone --depth 1 --branch "$DEVICE_TREE_BRANCH" "$COMMON_TREE_URL" "$COMMON_PATH"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
+    - name: Install lossless full-partition backup tool
+      if: env.DEVICE_NAME == 'beyond2lte'
+      run: |
+        set -euo pipefail
+        recovery_root="${{ steps.pwd.outputs.workspace-folder }}/fox_${{ env.MANIFEST_BRANCH }}/$COMMON_PATH/recovery/root"
+        install -D -m 0755 "$GITHUB_WORKSPACE/tools/foxpart" "$recovery_root/system/bin/foxpart"
+        test -s "$recovery_root/system/bin/foxpart"
+        echo "Installed foxpart for physical and logical partition backups"
+
     - name: Set Swap Space
       uses: pierotofy/set-swap-space@master
       with:
@@ -143,6 +152,7 @@ jobs:
         set -eo pipefail
         export FOX_BUILD_DEVICE="$DEVICE_NAME"
         export ALLOW_MISSING_DEPENDENCIES=true
+        if [ "$DEVICE_NAME" = beyond2lte ]; then export FOX_USE_ZSTD_BINARY=1; fi
         set +e
         source build/envsetup.sh
         set -e
@@ -170,6 +180,12 @@ jobs:
             exit 1
           fi
         fi
+        if [[ "$DEVICE_NAME" == "beyond2lte" && "$IMAGE_FILE" == "recovery.img" ]]; then
+          test -s "out/target/product/$DEVICE_NAME/recovery/root/system/bin/foxpart" || {
+            echo 'foxpart was not staged in the recovery ramdisk' >&2
+            exit 1
+          }
+        fi
         echo "Build output validated: $OUTPUT"
       working-directory: ${{ steps.pwd.outputs.workspace-folder }}
 
@@ -194,5 +210,6 @@ jobs:
           Manifest: ${{ env.MANIFEST_BRANCH }}
           Device: ${{ env.DEVICE_NAME }}
           Target: ${{ env.BUILD_TARGET }}
+          Backup enhancement: lossless Zstandard archive of physical and mapped logical partitions via the foxpart recovery terminal command; untested on hardware.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
