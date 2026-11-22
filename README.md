@@ -46,3 +46,9 @@ This OrangeFox tree targets the **LineageOS-style retrofitted dynamic partition 
 - [Original Action-OFRP-Builder](https://github.com/azwhikaru/Action-OFRP-Builder)
 
 Thanks to the OrangeFox, TWRP and device-tree contributors.
+
+## Full-partition Zstandard backup (Galaxy S10+)
+
+The S10+ recovery builder includes a lossless **Zstandard** backup/verify/restore utility called `foxpart`. It operates on named physical and mapped logical partition images from the OrangeFox Terminal; it does **not** compress live filesystems or replace the standard GUI backup format.
+
+Read [usage and safeguards](docs/partition-compression.md). On-device boot and recovery-image compatibility remain **untested**; builds are published as prereleases. The original [first release](https://github.com/RectifyData/OrangeFox/releases/tag/45036207179) remains unchanged, and a separate Actions audit downloads its `recovery.img` for signature, size and checksum checks.
