@@ -1,0 +1,48 @@
+name: Audit first OrangeFox recovery image
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - build/beyond2lte
+    paths:
+      - '.github/workflows/audit-first-release.yml'
+      - 'tools/foxpart'
+      - 'docs/partition-compression.md'
+
+permissions:
+  contents: write
+
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download original release IMG from GitHub
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir -p original-release
+          gh release download '45036207179' --repo "$GITHUB_REPOSITORY" --pattern '*.img' --dir original-release
+          test -s original-release/recovery.img
+      - name: Inspect recovery image integrity and Android boot header
+        run: |
+          set -euo pipefail
+          f=original-release/recovery.img
+          size=$(stat -c '%s' "$f")
+          magic=$(od -An -tx1 -N8 "$f" | tr -d ' \n')
+          sha=$(sha256sum "$f" | cut -d' ' -f1)
+          {
+            echo 'First-release recovery image audit'
+            echo 'Tag: 45036207179'
+            echo "SHA256: $sha"
+            echo "Size: $size bytes"
+            echo "Magic: $magic"
+            file "$f"
+          } | tee first-release-audit.txt
+          [ "$magic" = '414e44524f494421' ] || { echo 'Invalid Android recovery header' >&2; exit 1; }
+          (( size > 0 && size <= 67633152 )) || { echo 'Recovery image exceeds S10+ partition capacity' >&2; exit 1; }
+      - name: Attach audit to the original release
+        env:
+          GH_TOKEN: \${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload '45036207179' first-release-audit.txt --repo "$GITHUB_REPOSITORY" --clobber
