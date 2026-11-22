@@ -47,8 +47,11 @@ This OrangeFox tree targets the **LineageOS-style retrofitted dynamic partition 
 
 Thanks to the OrangeFox, TWRP and device-tree contributors.
 
-## Full-partition Zstandard backup (Galaxy S10+)
+## Full-partition backups and ready-to-flash builds (Galaxy S10+)
 
-The S10+ recovery builder includes a lossless **Zstandard** backup/verify/restore utility called `foxpart`. It operates on named physical and mapped logical partition images from the OrangeFox Terminal; it does **not** compress live filesystems or replace the standard GUI backup format.
+The S10+ recovery builder includes lossless **Zstandard with automatic gzip fallback** for raw physical and logical partition backups using the `foxpart` command in the recovery terminal. The official OrangeFox GUI backup format is unchanged. The attached R12.0 image had no `zstd` executable; the corrected helper uses the recovery's existing gzip support rather than failing.
 
-Read [usage and safeguards](docs/partition-compression.md). On-device boot and recovery-image compatibility remain **untested**; builds are published as prereleases. The original [first release](https://github.com/RectifyData/OrangeFox/releases/tag/45036207179) remains unchanged, and a separate Actions audit downloads its `recovery.img` for signature, size and checksum checks.
+New builds package three verified artifacts: `recovery.img`, `*-Odin.tar` and `*-flashable.zip`. The installer flashes only the S10+ recovery partition, checks the image checksum before writing and verifies the read-back image. It never wipes or reboots automatically.
+
+[Full usage, validation, and backup safeguards](docs/partition-compression.md). The [first release](https://github.com/RectifyData/OrangeFox/releases/tag/45036207179) remains unchanged. New builds are prereleases until hardware-tested.
+
